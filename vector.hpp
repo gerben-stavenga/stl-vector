@@ -268,9 +268,11 @@ template <typename T>
 class LocalCapture : public T {
     T* global_;
 public:
+    __attribute__((always_inline))
     LocalCapture(T* global) noexcept : T(std::move(*global)), global_(global) {
         global->~T();
     }
+    __attribute__((always_inline))
     ~LocalCapture() noexcept {
         new (global_) T(std::move(*static_cast<T*>(this)));
     }
