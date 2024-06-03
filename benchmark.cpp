@@ -59,6 +59,13 @@ enum LocalCapture {
     kLocalCapture
 };
 
+auto dummy = []() {
+#define xstr(s) str(s)
+#define str(s) #s
+    std::printf("Libc++ version: %s\n", xstr(_LIBCPP_VERSION));
+    return 0;
+}();
+
 template <typename T, LocalCapture capture>
 void BM_PushBack(benchmark::State& state) {
     T x;

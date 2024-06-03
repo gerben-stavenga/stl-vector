@@ -4,8 +4,19 @@
 #include <new>
 #include <vector>
 #include <memory>
+#include <memory_resource>
 #include <ranges>
 #include <string>
+
+#ifdef __cpp_exceptions
+#define __try try
+#define __catch(x) catch(x)
+#define __rethrow throw
+#else
+#define __try if (true)
+#define __catch(x) if (false)
+#define __rethrow 0
+#endif
 
 namespace gerben {
 
@@ -24,6 +35,29 @@ inline constexpr bool is_relocatable_v = std::is_pod_v<T> || is_known_relocatabl
 
 [[noreturn]] void ThrowOutOfRange();
 
+#if 0
+
+using MemResource = std::pmr::memory_resource;
+
+#else
+
+class MemResource {
+public:
+    void* allocate(size_t bytes, size_t alignment) {
+        return do_allocate(bytes, alignment);
+    }
+    void deallocate(void* ptr, size_t bytes, size_t alignment) {
+        return do_deallocate(ptr, bytes, alignment);
+    }
+
+private:
+    virtual void* do_allocate(size_t bytes, size_t alignment) = 0;
+    virtual void do_deallocate(void* ptr, size_t bytes, size_t alignment) = 0;
+    virtual bool do_is_equal(MemResource const& other) const noexcept = 0;
+};
+
+#endif
+
 class VecBase {
 public:
     constexpr uint32_t size() const noexcept { return size_; }
@@ -32,9 +66,7 @@ public:
 
 protected:
     constexpr VecBase() noexcept = default;
-    ~VecBase() noexcept {
-        if (base_) free(base_);
-    }
+    constexpr VecBase(MemResource* mr) noexcept : base_or_mr_(mr) {};
     VecBase(VecBase&& other) noexcept : VecBase() {
         Swap(other);
     }
@@ -43,8 +75,13 @@ protected:
         return *this;       
     }
 
+    template <typename T>
+    void Free() {
+        if (cap_ != 0) FreeOutline(base_or_mr_, cap_ * sizeof(T));
+    }
+
     template<typename T>
-    T* Base() const { return static_cast<T*>(base_); }
+    T* Base() const { return static_cast<T*>(base_or_mr_); }
 
     using Relocator = void (*)(void* dst, void *src, uint32_t size) noexcept;
 
@@ -60,30 +97,30 @@ protected:
     }
 
     void Swap(VecBase& other) noexcept {
-        std::swap(base_, other.base_);
+        std::swap(base_or_mr_, other.base_or_mr_);
         std::swap(size_, other.size_);
         std::swap(cap_, other.cap_);
     }
 
-    template <typename T, typename U>
-    void AddAlreadyReserved(U&& x) noexcept {
+    template <typename T>
+    void AddAlreadyReserved(T x) noexcept {
         auto s = size_;
-        new (Base<T>() + s) T(std::forward<U>(x));
+        new (Base<T>() + s) T(std::move(x));
         size_ = s + 1;
     }
 
-    template <typename T, typename U>
-    void Add(U&& x) noexcept {
+    template <typename T>
+    void Add(T x) noexcept __restrict {
         auto s = size_;
         auto c = cap_;
         if (s >= c) {
             Grow<T>();
         }
-        new (Base<T>() + s) T(std::forward<U>(x));
+        new (Base<T>() + s) T(std::move(x));
         size_ = s + 1;
     }
     template <typename T>
-    T Remove() noexcept {
+    T Remove() noexcept __restrict {
         auto p = Base<T>();
         auto s = size_ - 1;
         T res = std::move(p[s]);
@@ -100,18 +137,20 @@ protected:
     constexpr void SetSize(uint32_t s) noexcept { size_ = s; }
 
     template <typename T>
-    void Grow(uint32_t newcap = 0) noexcept {
+    void Grow(uint32_t newcap = 0) noexcept __restrict {
         Relocator mover = nullptr;
         if constexpr (!is_relocatable_v<T>) {
             mover = &Relocate<T>;
         }
-        std::tie(base_, cap_) = GrowOutline(base_, size_, cap_, sizeof(T), mover, newcap);
+        std::tie(base_or_mr_, cap_) = GrowOutline(base_or_mr_, size_, cap_, sizeof(T), mover, newcap);
     }
 
 private:
     static std::pair<void*, uint32_t> GrowOutline(void* base, uint32_t size, uint32_t cap, uint32_t elem_size, Relocator relocate, uint32_t newcap) noexcept;
+    static void FreeOutline(void* base, size_t bytes);
 
-    void* base_ = nullptr;
+    // If cap_ is 0 it's a memory resource otherwise it's pointing to base of buffer
+    void* base_or_mr_ = nullptr;
     uint32_t size_ = 0;
     uint32_t cap_ = 0;
 };
@@ -122,7 +161,11 @@ concept IsNoThrowMoveConstructible = std::is_nothrow_move_constructible_v<T>;
 template <IsNoThrowMoveConstructible T>
 struct Vec : public VecBase {
     constexpr Vec() noexcept = default;
-    ~Vec() noexcept { clear(); }
+    ~Vec() noexcept {
+        clear();
+        Free<T>();
+    }
+
     constexpr Vec(Vec&&) noexcept = default;
     constexpr Vec& operator=(Vec&& other) noexcept = default;
 
@@ -160,19 +203,36 @@ struct Vec : public VecBase {
     void reserve(uint32_t newcap) noexcept { return Reserve<T>(newcap); }
 
     template <typename U>
-    void push_back(U&& x) noexcept { Add<T>(std::forward<U>(x)); }
+    void push_back(U x) noexcept { Add<T>(std::move(x)); }
 
     T pop_back() noexcept { return Remove<T>(); }
 
     void clear() noexcept { for (auto& x : *this) x.~T(); SetSize(0); }
     void swap(Vec& other) noexcept { Swap(other); }
-    void resize(uint32_t s, T value = T()) noexcept {
+    void resize(uint32_t s) noexcept {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
             Reserve(s);
             auto p = data();
-            for (uint32_t i = size(); i < s; i++) new (p + i) T(value);
+            for (uint32_t i = size(); i < s; i++) new (p + i) T();
+        }
+        SetSize(s);
+    }
+    void resize(uint32_t s, const T& value) {
+        if (s <= size()) {
+            for (auto& x : Postfix(s)) x.~T();            
+        } else {
+            Reserve(s);
+            auto p = data();
+            for (uint32_t i = size(); i < s; i++) {
+                __try {
+                    new (p + i) T(value);
+                } __catch (...) {
+                    SetSize(i);
+                    __rethrow;
+                }
+            }
         }
         SetSize(s);
     }
@@ -190,8 +250,9 @@ struct Vec : public VecBase {
         }
         for (; first != last; ++first) push_back(*first);
     }
-    auto at(uint32_t idx) noexcept { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
-    auto at(uint32_t idx) const noexcept { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
+    // At is specified to throw
+    auto at(uint32_t idx) { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
+    auto at(uint32_t idx) const { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
 
     T& operator[](uint32_t idx) noexcept { return data()[idx]; }
     T const& operator[](uint32_t idx) const noexcept { return data()[idx]; }
