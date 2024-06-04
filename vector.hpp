@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <type_traits>
 #include <cstdint>
+#include <cstring>
 #include <tuple>
 #include <new>
 #include <vector>
@@ -9,13 +11,13 @@
 #include <string>
 
 #ifdef __cpp_exceptions
-#define __try try
-#define __catch(x) catch(x)
-#define __rethrow throw
+#define ___try try
+#define ___catch(x) catch(x)
+#define ___rethrow throw
 #else
-#define __try if (true)
-#define __catch(x) if (false)
-#define __rethrow 0
+#define ___try if (true)
+#define ___catch(x) if (false)
+#define ___rethrow 0
 #endif
 
 namespace gerben {
@@ -31,7 +33,7 @@ template <>
 inline constexpr bool is_known_relocatable_v<std::string> = true;
 
 template <typename T>
-inline constexpr bool is_relocatable_v = std::is_pod_v<T> || is_known_relocatable_v<T>;
+inline constexpr bool is_relocatable_v = std::is_trivial_v<T> || is_known_relocatable_v<T>;
 
 [[noreturn]] void ThrowOutOfRange();
 
@@ -202,8 +204,8 @@ struct Vec : public VecBase {
 
     void reserve(uint32_t newcap) noexcept { return Reserve<T>(newcap); }
 
-    template <typename U>
-    void push_back(U x) noexcept { Add<T>(std::move(x)); }
+    void push_back(const T& x) noexcept { Add<T>(x); }
+    void push_back(T&& x) noexcept { Add<T>(std::move(x)); }
 
     T pop_back() noexcept { return Remove<T>(); }
 
@@ -213,7 +215,7 @@ struct Vec : public VecBase {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
-            Reserve(s);
+            reserve(s);
             auto p = data();
             for (uint32_t i = size(); i < s; i++) new (p + i) T();
         }
@@ -223,14 +225,14 @@ struct Vec : public VecBase {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
-            Reserve(s);
+            reserve(s);
             auto p = data();
             for (uint32_t i = size(); i < s; i++) {
-                __try {
+                ___try {
                     new (p + i) T(value);
-                } __catch (...) {
+                } ___catch (...) {
                     SetSize(i);
-                    __rethrow;
+                    ___rethrow;
                 }
             }
         }
@@ -271,7 +273,7 @@ struct Vec : public VecBase {
     T* erase(T* first, T* last) noexcept {
         auto d = last - first;
         auto ret = first;
-        if (d == 0) return;
+        if (d == 0) return first;
         auto e = end();
         while (last != e) {
             *first = std::move(*last);
@@ -309,7 +311,7 @@ struct Vec : public VecBase {
         insert(position, T(std::forward<Args>(args)...));
     }
     template <typename... Args>
-    void emplace_back(T* position, Args&&... args) noexcept {
+    void emplace_back(Args&&... args) noexcept {
         push_back(T(std::forward<Args>(args)...));
     }
 
