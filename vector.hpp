@@ -35,7 +35,7 @@ inline constexpr bool is_relocatable_v = std::is_pod_v<T> || is_known_relocatabl
 
 [[noreturn]] void ThrowOutOfRange();
 
-#if 0
+#if 1
 
 using MemResource = std::pmr::memory_resource;
 
@@ -110,7 +110,7 @@ protected:
     }
 
     template <typename T>
-    void Add(T x) noexcept __restrict {
+    void Add(T x) noexcept {
         auto s = size_;
         auto c = cap_;
         if (s >= c) {
@@ -120,7 +120,7 @@ protected:
         size_ = s + 1;
     }
     template <typename T>
-    T Remove() noexcept __restrict {
+    T Remove() noexcept {
         auto p = Base<T>();
         auto s = size_ - 1;
         T res = std::move(p[s]);
@@ -137,7 +137,7 @@ protected:
     constexpr void SetSize(uint32_t s) noexcept { size_ = s; }
 
     template <typename T>
-    void Grow(uint32_t newcap = 0) noexcept __restrict {
+    void Grow(uint32_t newcap = 0) noexcept {
         Relocator mover = nullptr;
         if constexpr (!is_relocatable_v<T>) {
             mover = &Relocate<T>;
