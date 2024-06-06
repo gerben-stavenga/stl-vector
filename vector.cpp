@@ -31,9 +31,9 @@ inline MemResource*& MemoryResource(void* ptr) {
     return static_cast<MemResource**>(ptr)[-1];
 }
 
-inline void* Alloc(MemResource* mr, size_t cap, size_t elem_size) noexcept {
+inline void* Alloc(MemResource* mr, size_t cap) noexcept {
     __try {
-        auto ptr = mr->allocate(cap *  elem_size + sizeof(std::max_align_t), sizeof(std::max_align_t));
+        auto ptr = mr->allocate(cap + sizeof(std::max_align_t), sizeof(std::max_align_t));
         ptr = static_cast<std::byte*>(ptr) + sizeof(std::max_align_t);
         MemoryResource(ptr) = mr;
         return ptr;
@@ -46,30 +46,36 @@ inline void Dealloc(MemResource* mr, void* base, size_t bytes) noexcept {
     mr->deallocate(static_cast<std::max_align_t*>(base) - 1, bytes + sizeof(std::max_align_t), sizeof(std::max_align_t));
 }
 
-std::pair<void*, uint32_t> VecBase::GrowOutline(void* base, uint32_t size, uint32_t cap, uint32_t elem_size, Relocator relocate, uint32_t newcap) noexcept {
-    if (cap == 0) {
-        auto mr = static_cast<MemResource*>(base);
-        if (mr == nullptr) mr = &def_alloc;
-        newcap = std::max<uint32_t>(newcap, 1);
-        auto newbase = Alloc(mr, newcap, elem_size);
-        return {newbase, newcap};
-    } else {
-        auto mr = MemoryResource(base);
-        newcap = std::max<uint32_t>(newcap, cap * 2);
-        auto newbase = Alloc(mr, newcap, elem_size);
-        if (relocate) {
-            relocate(newbase, base, size);
-        } else {
-            std::memcpy(newbase, base, size * elem_size);
-        }
-        Dealloc(mr, base, cap * elem_size);
-        return {newbase, newcap};
-    }
+inline size_t BufferSize(const void* begin, const void* end) {
+    return static_cast<const char*>(end) - static_cast<const char*>(begin);
 }
 
-void VecBase::FreeOutline(void* base, size_t bytes) {
-    auto mr = MemoryResource(base);
-    Dealloc(mr, base, bytes);
+PmrBuffer PmrBuffer::GrowOutline(PmrBuffer buffer, void* end, Relocator relocate, size_t newcap) noexcept {
+    if (buffer.end_cap == nullptr) {
+        auto mr = static_cast<MemResource*>(buffer.base_or_mr);
+        if (mr == nullptr) mr = &def_alloc;
+        buffer.base_or_mr = Alloc(mr, newcap);
+    } else {
+        auto cap = BufferSize(buffer.base_or_mr, buffer.end_cap);
+        newcap = std::max<uint32_t>(newcap, cap * 2);
+        auto mr = MemoryResource(buffer.base_or_mr);
+        auto newbase = Alloc(mr, newcap);
+        if (relocate) {
+            relocate(newbase, buffer.base_or_mr, end);
+        } else {
+            std::memcpy(newbase, buffer.base_or_mr, BufferSize(buffer.base_or_mr, end));
+        }
+        Dealloc(mr, buffer.base_or_mr, cap);
+        buffer.base_or_mr = newbase;
+    }
+    buffer.end_cap = static_cast<char*>(buffer.base_or_mr) + newcap;
+    return buffer;
+}
+
+void PmrBuffer::FreeOutline(PmrBuffer buffer) noexcept {
+    auto bytes = BufferSize(buffer.end_cap, buffer.base_or_mr);
+    auto mr = MemoryResource(buffer.base_or_mr);
+    Dealloc(mr, buffer.base_or_mr, bytes);
 }
 
 }

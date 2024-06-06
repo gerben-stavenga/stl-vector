@@ -58,131 +58,107 @@ private:
 
 #endif
 
-class VecBase {
-public:
-    constexpr uint32_t size() const noexcept { return size_; }
-    constexpr bool empty() const noexcept { return size() == 0; }
-    constexpr uint32_t capacity() const noexcept { return cap_; }
-
-protected:
-    constexpr VecBase() noexcept = default;
-    constexpr VecBase(MemResource* mr) noexcept : base_or_mr_(mr) {};
-    VecBase(VecBase&& other) noexcept : VecBase() {
-        Swap(other);
-    }
-    VecBase& operator=(VecBase&& other) noexcept {
-        Swap(other);
-        return *this;       
-    }
+struct PmrBuffer {
+    constexpr PmrBuffer() = default;
+    constexpr PmrBuffer(MemResource* mr) noexcept : base_or_mr(mr) {};
 
     template <typename T>
     void Free() {
-        if (cap_ != 0) FreeOutline(base_or_mr_, cap_ * sizeof(T));
+        if (end_cap != nullptr) FreeOutline(*this);
     }
 
     template<typename T>
-    T* Base() const { return static_cast<T*>(base_or_mr_); }
+    T* Base() const { return static_cast<T*>(base_or_mr); }
 
-    using Relocator = void (*)(void* dst, void *src, uint32_t size) noexcept;
+    using Relocator = void (*)(void* dst, void *src, void* end) noexcept;
 
     template <typename T>
-    static void Relocate(void* dst, void* src, uint32_t size) noexcept {
+    static void Relocate(void* dst, void* src, void* end) noexcept {
         auto d = static_cast<T*>(dst);
         auto s = static_cast<T*>(src);
-        for (uint32_t i = 0; i < size; i++) {
-            T tmp = std::move(s[i]);
-            s[i].~T();
-            new (d + i) T(std::move(tmp));
+        auto e = static_cast<T*>(end);
+
+        for (; s != e; ++s, ++d) {
+            T tmp = std::move(*s);
+            *s.~T();
+            new (d) T(std::move(tmp));
         }
     }
 
-    void Swap(VecBase& other) noexcept {
-        std::swap(base_or_mr_, other.base_or_mr_);
-        std::swap(size_, other.size_);
-        std::swap(cap_, other.cap_);
-    }
-
     template <typename T>
-    void AddAlreadyReserved(T x) noexcept {
-        auto s = size_;
-        new (Base<T>() + s) T(std::move(x));
-        size_ = s + 1;
-    }
-
-    template <typename T>
-    void Add(T x) noexcept __restrict {
-        auto s = size_;
-        auto c = cap_;
-        if (s >= c) {
-            Grow<T>();
+    T* Add(T* pos, T x) {
+        if (pos >= end_cap) {
+            pos = Grow(pos, sizeof(T));
         }
-        new (Base<T>() + s) T(std::move(x));
-        size_ = s + 1;
+        new (pos) T(std::move(x));
+        return pos + 1;
     }
-    template <typename T>
-    T Remove() noexcept __restrict {
-        auto p = Base<T>();
-        auto s = size_ - 1;
-        T res = std::move(p[s]);
-        p[s].~T();
-        size_ = s;
-        return res;
-    }
-    template <typename T>
-    void Reserve(uint32_t newcap) noexcept {
-        if (newcap > cap_) {
-            Grow<T>(newcap);
-        }
-    }
-    constexpr void SetSize(uint32_t s) noexcept { size_ = s; }
 
     template <typename T>
-    void Grow(uint32_t newcap = 0) noexcept __restrict {
+    T* Grow(T* end, size_t newcap) noexcept {
         Relocator mover = nullptr;
         if constexpr (!is_relocatable_v<T>) {
             mover = &Relocate<T>;
         }
-        std::tie(base_or_mr_, cap_) = GrowOutline(base_or_mr_, size_, cap_, sizeof(T), mover, newcap);
+        auto diff = end - Base<T>();
+        *this = GrowOutline(*this, end, mover, newcap);
+        return Base<T>() + diff;
     }
 
-private:
-    static std::pair<void*, uint32_t> GrowOutline(void* base, uint32_t size, uint32_t cap, uint32_t elem_size, Relocator relocate, uint32_t newcap) noexcept;
-    static void FreeOutline(void* base, size_t bytes);
+    static PmrBuffer GrowOutline(PmrBuffer buffer, void* end, Relocator relocate, size_t newcap) noexcept;
+    static void FreeOutline(PmrBuffer buffer) noexcept;
 
-    // If cap_ is 0 it's a memory resource otherwise it's pointing to base of buffer
-    void* base_or_mr_ = nullptr;
-    uint32_t size_ = 0;
-    uint32_t cap_ = 0;
+
+    void* base_or_mr = nullptr;
+    void* end_cap = nullptr;
 };
 
 template <typename T>
 concept IsNoThrowMoveConstructible = std::is_nothrow_move_constructible_v<T>;
 
 template <IsNoThrowMoveConstructible T>
-struct Vec : public VecBase {
+class Vec {
+    PmrBuffer buffer_;
+    T* end_ = nullptr;
+
+    T* end_cap() const { return static_cast<T*>(buffer_.end_cap); }
+
+public:
     constexpr Vec() noexcept = default;
+    __attribute__((always_inline))
     ~Vec() noexcept {
         clear();
-        Free<T>();
+        buffer_.Free<T>();
     }
 
-    constexpr Vec(Vec&&) noexcept = default;
-    constexpr Vec& operator=(Vec&& other) noexcept = default;
+    constexpr Vec(Vec&& other) noexcept { swap(other); }
+    constexpr Vec& operator=(Vec&& other) noexcept { swap(other); }
 
     template <typename U>
-    Vec(const std::initializer_list<U>& list) {
+    Vec(const std::initializer_list<U>& list) : Vec() {
         reserve(list.size());
         for (auto& x : list) AddAlreadyReserved<T>(x);
     }
 
     template <typename U>
-    Vec(uint32_t n, U x) { 
+    Vec(uint32_t n, U x) : Vec() { 
         reserve(n);
         for (uint32_t i = 0; i < n; i++) AddAlreadyReserved<T>(x);
     }
 
-    constexpr T* data() noexcept { return Base<T>(); }
-    constexpr T const* data() const noexcept  { return Base<T>(); }
+    void swap(Vec& other) noexcept {
+        std::swap(buffer_, other.buffer_);
+        std::swap(end_, other.end_);
+    }
+
+    constexpr size_t size() const { return end_ - data(); }
+    constexpr bool empty() const { return end_ == data(); }
+    constexpr size_t capacity() const {
+        return end_cap() == nullptr ? 0 : end_cap() - data();
+    }
+
+    constexpr T* data() noexcept { return buffer_.Base<T>(); }
+    constexpr T const* data() const noexcept  { return buffer_.Base<T>(); }
 
     constexpr T* begin() noexcept  { return data(); }
     constexpr T const* begin() const noexcept  { return data(); }
@@ -197,33 +173,44 @@ struct Vec : public VecBase {
     constexpr auto rend() noexcept  { return std::reverse_iterator(begin()); }
     constexpr auto rend() const noexcept  { return std::reverse_iterator(begin()); }
     constexpr auto crbegin() const noexcept  { return rbegin(); }
-    constexpr auto crend() const noexcept  { return rend; }
+    constexpr auto crend() const noexcept  { return rend(); }
 
+    void reserve(size_t newcap) noexcept { 
+        if (newcap > capacity()) Grow<T>(end_, newcap);
+    }
 
-    void reserve(uint32_t newcap) noexcept { return Reserve<T>(newcap); }
+    void push_back(const T& x) { end_ = buffer_.Add<T>(end_, x); }
+    void push_back(T&& x) { end_ = buffer_.Add<T>(end_, std::move(x)); }
 
-    template <typename U>
-    void push_back(U x) noexcept { Add<T>(std::move(x)); }
+    T pop_back() {
+        auto e = end_ - 1; 
+        T res = std::move(*e);
+        e->~T();
+        end_ = e;
+        return res;
+    }
 
-    T pop_back() noexcept { return Remove<T>(); }
+    void clear() { 
+        for (auto& x : *this) x.~T();
+        end_ = data();
+    }
 
-    void clear() noexcept { for (auto& x : *this) x.~T(); SetSize(0); }
-    void swap(Vec& other) noexcept { Swap(other); }
-    void resize(uint32_t s) noexcept {
+    void resize(size_t s) {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
-            Reserve(s);
+            reserve(s);
             auto p = data();
             for (uint32_t i = size(); i < s; i++) new (p + i) T();
         }
         SetSize(s);
     }
+
     void resize(uint32_t s, const T& value) {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
-            Reserve(s);
+            reserve(s);
             auto p = data();
             for (uint32_t i = size(); i < s; i++) {
                 __try {
@@ -320,6 +307,8 @@ struct Vec : public VecBase {
     std::span<T const> Prefix(uint32_t idx) const { return {data(), idx}; }
     std::span<T> Postfix(uint32_t idx) { return {data() + idx, size() - idx}; }
     std::span<T const> Postfix(uint32_t idx) const { return {data() + idx, size() - idx}; }
+
+    void SetSize(size_t s) { end_ = data() + s; } 
 };
 
 template <typename T>

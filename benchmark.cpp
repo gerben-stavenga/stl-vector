@@ -7,13 +7,23 @@
 
 template <typename T>
 struct ProtoVec {
+    ProtoVec() = default;
+    ProtoVec(ProtoVec&& other) : ProtoVec() {
+        swap(other);
+    } 
     template <typename U>
     void push_back(U&& x) { rep_field_.Add(std::forward<U>(x)); }
     void pop_back() { rep_field_.RemoveLast(); }
     auto& back() const { return rep_field_[rep_field_.size() - 1]; }
     void clear() { rep_field_.Clear(); }
     const T* data() { return rep_field_.data(); }
-    void swap(ProtoVec& other) { rep_field_.Swap(&other.rep_field_); }
+    void swap(ProtoVec& other) {
+        constexpr int n = sizeof rep_field_;
+        char buffer[n];
+        std::memcpy(buffer, &rep_field_, n);
+        std::memcpy(&rep_field_, &other.rep_field_, n);
+        std::memcpy(&other.rep_field_, buffer, n);
+    }
     bool empty() const { return rep_field_.empty(); }
 
     google::protobuf::RepeatedField<T> rep_field_;
