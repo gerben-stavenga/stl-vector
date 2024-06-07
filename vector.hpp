@@ -88,7 +88,7 @@ struct PmrBuffer {
     template <typename T>
     T* Add(T* pos, T x) {
         if (pos >= end_cap) {
-            pos = Grow(pos, sizeof(T));
+            pos = Grow(pos, 1);
         }
         new (pos) T(std::move(x));
         return pos + 1;
@@ -100,9 +100,9 @@ struct PmrBuffer {
         if constexpr (!is_relocatable_v<T>) {
             mover = &Relocate<T>;
         }
-        auto diff = end - Base<T>();
-        *this = GrowOutline(*this, end, mover, newcap);
-        return Base<T>() + diff;
+        auto diff = reinterpret_cast<uintptr_t>(end) - reinterpret_cast<uintptr_t>(Base<T>());
+        *this = GrowOutline(*this, end, mover, newcap * sizeof(T));
+        return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(Base<T>()) + diff);
     }
 
     static PmrBuffer GrowOutline(PmrBuffer buffer, void* end, Relocator relocate, size_t newcap) noexcept;
@@ -141,9 +141,9 @@ public:
     }
 
     template <typename U>
-    Vec(uint32_t n, U x) : Vec() { 
+    Vec(size_t n, U x) : Vec() { 
         reserve(n);
-        for (uint32_t i = 0; i < n; i++) AddAlreadyReserved<T>(x);
+        for (size_t i = 0; i < n; i++) AddAlreadyReserved<T>(x);
     }
 
     void swap(Vec& other) noexcept {
@@ -176,14 +176,14 @@ public:
     constexpr auto crend() const noexcept  { return rend(); }
 
     void reserve(size_t newcap) noexcept { 
-        if (newcap > capacity()) Grow<T>(end_, newcap);
+        if (newcap > capacity()) end_ = Grow<T>(end_, newcap);
     }
 
     void push_back(const T& x) { end_ = buffer_.Add<T>(end_, x); }
     void push_back(T&& x) { end_ = buffer_.Add<T>(end_, std::move(x)); }
 
     T pop_back() {
-        auto e = end_ - 1; 
+        auto e = end_ - 1;
         T res = std::move(*e);
         e->~T();
         end_ = e;
@@ -201,18 +201,18 @@ public:
         } else {
             reserve(s);
             auto p = data();
-            for (uint32_t i = size(); i < s; i++) new (p + i) T();
+            for (size_t i = size(); i < s; i++) new (p + i) T();
         }
         SetSize(s);
     }
 
-    void resize(uint32_t s, const T& value) {
+    void resize(size_t s, const T& value) {
         if (s <= size()) {
             for (auto& x : Postfix(s)) x.~T();            
         } else {
             reserve(s);
             auto p = data();
-            for (uint32_t i = size(); i < s; i++) {
+            for (size_t i = size(); i < s; i++) {
                 __try {
                     new (p + i) T(value);
                 } __catch (...) {
@@ -226,7 +226,7 @@ public:
 
     template <typename It>
     void assign(It first, It last) noexcept {
-        uint32_t idx = 0;
+        size_t idx = 0;
         for (auto &x : *this) {
             if (first == last) {
                 resize(idx);
@@ -238,18 +238,18 @@ public:
         for (; first != last; ++first) push_back(*first);
     }
     // At is specified to throw
-    auto at(uint32_t idx) { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
-    auto at(uint32_t idx) const { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
+    auto at(size_t idx) { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
+    auto at(size_t idx) const { if (idx >= size()) ThrowOutOfRange(); return Get(idx); }
 
-    T& operator[](uint32_t idx) noexcept { return data()[idx]; }
-    T const& operator[](uint32_t idx) const noexcept { return data()[idx]; }
+    T& operator[](size_t idx) noexcept { return data()[idx]; }
+    T const& operator[](size_t idx) const noexcept { return data()[idx]; }
 
     auto front() noexcept { return Get(0); }
     auto front() const noexcept { return Get(0); }
-    auto back() noexcept { return Get(size() - 1); }
-    auto back() const noexcept { return Get(size() - 1); }
+    auto back() noexcept { return end_[-1]; }
+    auto back() const noexcept { return end_[-1]; }
 
-    void shrink_to_fit(uint32_t) noexcept {}
+    void shrink_to_fit(size_t) noexcept {}
 
     T* erase(T* first) noexcept {
         return erase(first, first + 1);
@@ -277,7 +277,7 @@ public:
         push_back(std::move(res));
         std::rotate(data() + i, data() + s, data() + size());
     }
-    void insert(T* position, uint32_t n, const T& res) noexcept {
+    void insert(T* position, size_t n, const T& res) noexcept {
         auto i = position - data();
         auto s = size();
         reserve(n + s);
@@ -300,13 +300,13 @@ public:
         push_back(T(std::forward<Args>(args)...));
     }
 
-    T& Get(uint32_t idx) noexcept { return data()[idx]; }
-    T const& Get(uint32_t idx) const noexcept { return data()[idx]; }
+    T& Get(size_t idx) noexcept { return data()[idx]; }
+    T const& Get(size_t idx) const noexcept { return data()[idx]; }
 
-    std::span<T> Prefix(uint32_t idx) { return {data(), idx}; }
-    std::span<T const> Prefix(uint32_t idx) const { return {data(), idx}; }
-    std::span<T> Postfix(uint32_t idx) { return {data() + idx, size() - idx}; }
-    std::span<T const> Postfix(uint32_t idx) const { return {data() + idx, size() - idx}; }
+    std::span<T> Prefix(size_t idx) { return {data(), idx}; }
+    std::span<T const> Prefix(size_t idx) const { return {data(), idx}; }
+    std::span<T> Postfix(size_t idx) { return {data() + idx, size() - idx}; }
+    std::span<T const> Postfix(size_t idx) const { return {data() + idx, size() - idx}; }
 
     void SetSize(size_t s) { end_ = data() + s; } 
 };

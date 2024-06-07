@@ -44,7 +44,7 @@ void AddLocalCapture(int n, T* x) {
 
 template <typename T>
 __attribute__((noinline))
-void PopPush(T* from, T* to) {
+void PopPush(T* __restrict from, T* __restrict to) {
     while (!from->empty()) {
         auto tmp = std::move(from->back());
         from->pop_back();
