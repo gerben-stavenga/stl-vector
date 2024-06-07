@@ -67,7 +67,7 @@ std::pair<void*, uint32_t> VecBase::GrowOutline(void* base, uint32_t size, uint3
     }
 }
 
-void VecBase::FreeOutline(void* base, size_t bytes) {
+void VecBase::FreeOutline(void* base, size_t bytes) noexcept {
     auto mr = MemoryResource(base);
     Dealloc(mr, base, bytes);
 }

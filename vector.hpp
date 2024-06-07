@@ -149,7 +149,7 @@ protected:
 
 private:
     static std::pair<void*, uint32_t> GrowOutline(void* base, uint32_t size, uint32_t cap, uint32_t elem_size, Relocator relocate, uint32_t newcap) noexcept;
-    static void FreeOutline(void* base, size_t bytes);
+    static void FreeOutline(void* base, size_t bytes) noexcept;
 
     // If cap_ is 0 it's a memory resource otherwise it's pointing to base of buffer
     void* base_or_mr_ = nullptr;

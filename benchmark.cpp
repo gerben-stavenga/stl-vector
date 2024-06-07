@@ -60,9 +60,25 @@ enum LocalCapture {
 };
 
 auto dummy = []() {
+    const char kCompilerVersion[] = 
 #define xstr(s) str(s)
 #define str(s) #s
-    std::printf("Libc++ version: %s\n", xstr(_LIBCPP_VERSION));
+#ifdef __clang__
+        "clang " xstr(__clang_major__) "." xstr(__clang_minor__) "." xstr(__clang_patchlevel__);
+#elif defined(__GNUC__)
+        "gcc " xstr(__GNUC__) "." xstr(__GNUC_MINOR__);
+#else
+        "unknown";
+#endif
+    const char kStdLib[] =
+#ifdef _LIBCPP_VERSION
+        "libc++ version:" xstr(_LIBCPP_VERSION);
+#elif defined(__GLIBCXX__)
+        "stdlibc++ version: " xstr(__GLIBCXX__);
+#else
+        "unknown stdlib"
+#endif
+    std::printf("Build with %s and %s\n", kCompilerVersion, kStdLib);
     return 0;
 }();
 
