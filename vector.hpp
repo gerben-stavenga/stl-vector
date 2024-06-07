@@ -80,7 +80,7 @@ struct PmrBuffer {
 
         for (; s != e; ++s, ++d) {
             T tmp = std::move(*s);
-            *s.~T();
+            s->~T();
             new (d) T(std::move(tmp));
         }
     }
