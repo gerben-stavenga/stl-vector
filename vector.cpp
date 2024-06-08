@@ -1,6 +1,6 @@
 #include "vector.hpp"
 
-#include <cstdint>
+#include <cstring>
 
 namespace gerben {
 
@@ -32,12 +32,12 @@ inline MemResource*& MemoryResource(void* ptr) {
 }
 
 inline void* Alloc(MemResource* mr, size_t cap) noexcept {
-    __try {
+    ___try {
         auto ptr = mr->allocate(cap + sizeof(std::max_align_t), sizeof(std::max_align_t));
         ptr = static_cast<std::byte*>(ptr) + sizeof(std::max_align_t);
         MemoryResource(ptr) = mr;
         return ptr;
-    } __catch(...) {
+    } ___catch(...) {
         abort();
     }
 }
