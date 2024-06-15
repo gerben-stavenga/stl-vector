@@ -56,7 +56,7 @@ void Add(int n, T* x) {
 
 template <bool kLocalCapture, typename T>
 __attribute__((noinline))
-void PopPush(T* x, T* y) {
+void PopPush(T* __restrict x, T* __restrict y) {
     MaybeLocalCapture<kLocalCapture, T> from(x);
     MaybeLocalCapture<kLocalCapture, T> to(y);
     while (!from->empty()) {
